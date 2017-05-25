@@ -150,9 +150,9 @@ namespace GeoGeometry {
 	}
 
 	/// @brief retrieves the southwest corner of the given BoundingBox
-	inline Position getsw (const BoundingBox& bb) {return get<0>(bb);};
+	inline Position& getsw (const BoundingBox& bb) {return get<0>(bb);};
 	/// @brief retrieves the northeast corner of the given BoundingBox
-	inline Position getne (const BoundingBox& bb) {return get<1>(bb);};
+	inline Position& getne (const BoundingBox& bb) {return get<1>(bb);};
 	/// @brief creates a bounding box from the given positions
 	inline BoundingBox makeBBox (const Position& sw, const Position& ne) {
 		return make_tuple(sw, ne);
@@ -196,6 +196,14 @@ namespace GeoGeometry {
 				(getlat(getne(b)) > getlat(getsw(b))));
 	};
 
+	///@brief checks whether a given Point or Location is within the giving bounding box
+	inline bool bboxContains (const BoundingBox& b, const Point& p) {return bboxContains(b,p.getPosition());};
+	inline bool bboxContains (const BoundingBox& b, const Position& p) {
+		if (!bboxValid(b)) return false;
+		return ((getlon(p) <= getlon(getne(b))) && (getlon(p) >= getlon(getsw(b))) &&
+				(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
+	}
+ 
 	// utility functions
 	inline double deg2rad (double deg) { return deg * ( M_PI / 180.0 ); }	/**< Convert degrees to radians */
 	inline double rad2deg (double rad) { return rad * ( 180.0 / M_PI ); }	/**< Convert radians to degrees */
@@ -222,7 +230,8 @@ namespace GeoGeometry {
 	/// @param s1 is the other end of the line segment
 	/// @param type the distance type used in this calculation
 	/// @returns the Position on the line segment closest to p
-	inline Position point2segment(const Point& p, const Point& s0, const Point& s1, const GeometryType type) {
+	inline Position point2segment(const Point& p, const Point& s0, const Point& s1, 
+		const CourseTypeEnum type = CourseTypeEnum::RhumbLine) {
 		TwoVector v = s0.target(s1.getPosition(), type);
 		TwoVector w = s0.target(p.getPosition(), type);
 		double c1 = w * v;
@@ -240,10 +249,10 @@ namespace GeoGeometry {
 	/// @param s1 the end of the segment to test
 	/// @returns true if the point lies in the segment
 	inline bool inSegment(const Position& p, const Position& s0, const Position& s1) {
-		if (fabs(getlat(s0) - getlat(s1)) > smallnum) {		// the segment is not vertical
+		if (fabs(getlat(s0) - getlat(s1)) > smallnum) {		// the segment is not e-w
 			if ((getlat(s0) <= getlat(p)) && (getlat(p) <= getlat(s1))) return true;
 			if ((getlat(s0) >= getlat(p)) && (getlat(p) >= getlat(s1))) return true;
-		} else {											// segment is vertical
+		} else {											// segment is e-w
 			if ((getlon(s0) <= getlon(p)) && (getlon(p) <= getlon(s1))) return true;
 			if ((getlon(s0) >= getlon(p)) && (getlon(p) >= getlon(s1))) return true;
 		}
@@ -322,6 +331,31 @@ namespace GeoGeometry {
 			return 1;
 		}
 	}
+
+	/// @brief determine whether a point is to the left of a given line
+	/// @param p the Position of the point to test
+	/// @param s0 a Position on the line to test
+	/// @param s1 another Position on the line to test
+	/// @returns > 0 if p is to the left of the line s
+	/// == 0 if p is on the line s
+	/// < 0 if p is to the right of line s
+	inline double isLeft (const Position& p, const Position& s0, const Position& s1) {
+		return (getlat(s1) - getlat(s0))*(getlon(p) - getlon(s0)) - 
+				(getlat(p) - getlat(s0))*(getlon(s1) - getlon(s0));
+	};
+
+	/// @brief comparison function for sorting Positions by latitude
+	inline bool latlt (const Position& a, const Position& b) {
+		if (getlat(a) < getlat(b)) return true;
+		return false;
+	}
+
+	/// @brief comparison function for sorting Positions by longitude
+	inline bool lonlt (const Position& a, const Position& b) {
+		if (getlon(a) < getlon(b)) return true;
+		return false;
+	}
+
 
 	/** @class TwoVector
 	 *
@@ -724,7 +758,14 @@ namespace GeoGeometry {
 				return p;
 			};
 
-			bool isValid () {return (positionValid(_posn));};
+			bool isValid () {
+				if (_mytype == GeometryType::Point) return (positionValid(_posn));
+				return false;
+			};
+			
+			double& getlon () {return getlon(_posn);};
+			double& getlat () {return getlat(_posn);};
+			double& getele () {return getlon(_posn);};
 
 		private:
 			Position _posn;
@@ -1116,10 +1157,17 @@ namespace GeoGeometry {
 			/// @returns the approximate convex hull
 			Polygon makeApproximateHull (const unsigned int k) {};
 
-			/// @brief Find a convex hull using the Graham Scan algorithm described
-			/// at http://geomalgorithms.com/a10-_hull-1.html
+			/// @brief Find a convex hull using Andrew's Monotone Chain algorithm 
+			/// described at http://geomalgorithms.com/a10-_hull-1.html
 			/// @returns the convex hull
-			Polygon makeHull () {};
+			Polygon makeHull () {
+				if (!isValid()) return Polygon();
+				vector<Position> mypoly = _points;			// copy the points vector so we can sort it
+				vector<Position> hull;
+				sort(mypoly.begin(), mypoly.end(), latlt);
+				sort(mypoly.begin(), mypoly.end(), lonlt);
+
+			};
 
 			bool includes (const Point& p) const {return includes(p.getPosition())};
 			bool includes (const Position& p) const {};
@@ -1139,12 +1187,16 @@ namespace GeoGeometry {
 			};
 	};
 
+	template<typename T*> class Collection : public GeometryRoot {
+
+	}
+
 	/** @class MultiLineString
 	 *
 	 * @brief represents a GeoJSON MultiLineString type
 	 *
 	 */
-	class MultiLineString : public GeometryRoot {
+	class MultiLineString : public Collection<LineString*> {
 		public:
 			/// @brief creates a blank MultiLineString
 			MultiLineString () : _mytype(GeometryType::MultiLineString) {};
@@ -1231,7 +1283,7 @@ namespace GeoGeometry {
 			/// @param t is the index of the position to add the new line
 			/// @param l is the line to add
 			/// @returns true if successful
-			bool insert (const LineString& l, const unsigned int& t) {return insert()};
+			bool insert (const LineString& l, const unsigned int& t) {};
 			bool insert (const MultiPoint& l, const unsigned int& t) {};
 			bool insert (const vector<Position>& l, const unsigned int& t) {
 				if (t >= _lines.Size()) {
@@ -1381,7 +1433,7 @@ namespace GeoGeometry {
 			};
 	};
 
-	class MultiPolygon : public GeometryRoot {
+	class MultiPolygon : public Collection<Polygon*> {
 		public:
 			MultiPolygon () {};
 			MultiPolygon (const Value& val) {};
@@ -1409,7 +1461,7 @@ namespace GeoGeometry {
 			bool makebox () {};
 	};
 
-	class GeometryCollection : public GeometryRoot {};
+	class GeometryCollection : public Collection<GeometryRoot*> {};
 
 };
 
