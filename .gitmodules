@@ -1,0 +1,6 @@
+[submodule "submodule/rapidjson"]
+	path = submodule/rapidjson
+	url = https://github.com/logos-electromechanical/rapidjson.git
+[submodule "submodule/googletest"]
+	path = submodule/googletest
+	url = https://github.com/google/googletest.git

@@ -12,6 +12,7 @@ GTEST_INC= $(GTEST_ROOT)/include/
 CXXFLAGS += $(OPTS) -Wno-reorder -g -std=gnu++14 -pthread
 
 CPPFLAGS += -I $(GTEST_INC)
+CPPFLAGS += -I include
 CPPFLAGS += -D _USE_MATH_DEFINES
 CPPFLAGS += -MMD -MT $@
 
@@ -25,10 +26,10 @@ test: unit_tests
 	./unit_tests
 .PHONY: all test
 
-TEST_OBJS = position_test.o
-#TEST_OBJS += boundingbox_test.o
-TEST_OBJS += point_test.o
-TEST_OBJS += twovector_test.o
+TEST_OBJS = src/position_test.o
+TEST_OBJS += src/boundingbox_test.o
+TEST_OBJS += src/point_test.o
+TEST_OBJS += src/twovector_test.o
 GTEST_OBJS = gtest.o gtest_main.o
 ALL_OBJS+= $(TEST_OBJS) $(GTEST_OBJS)
 
