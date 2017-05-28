@@ -1,11 +1,15 @@
 # This file uses GNU make extensions.
 
+# use g++-6
+CXX = /usr/bin/g++-6
+CC = /usr/bin/gcc-6
+
 # Tweakable / overridable compilation options (debugging and optimization)
 OPTS = -gdwarf-4 -g3 -Os -Wall
 #OPTS = -gdwarf-4 -g3 -Wall
 
 # Paths
-GTEST_ROOT= submodules/googletest/googletest
+GTEST_ROOT= submodule/googletest/googletest
 GTEST_DIR= $(GTEST_ROOT)
 GTEST_INC= $(GTEST_ROOT)/include/
 
@@ -13,12 +17,18 @@ CXXFLAGS += $(OPTS) -Wno-reorder -g -std=gnu++14 -pthread
 
 CPPFLAGS += -I $(GTEST_INC)
 CPPFLAGS += -I include
+CPPFLAGS += -I submodule/rapidjson/include
 CPPFLAGS += -D _USE_MATH_DEFINES
 CPPFLAGS += -MMD -MT $@
 
 LDFLAGS  += -L /usr/local/lib
 LDLIBS += -lm
 LDLIBS += -lrt
+LDLIBS += -lGeographic
+
+export OPTS
+
+VPATH=src
 
 all: test
 test: unit_tests
@@ -26,10 +36,13 @@ test: unit_tests
 	./unit_tests
 .PHONY: all test
 
-TEST_OBJS = src/position_test.o
-TEST_OBJS += src/boundingbox_test.o
-TEST_OBJS += src/point_test.o
-TEST_OBJS += src/twovector_test.o
+TEST_SRCS = position_test.o
+TEST_SRCS += boundingbox_test.o
+TEST_SRCS += point_test.o
+TEST_SRCS += twovector_test.o
+
+TEST_OBJS = $(addprefix src/test/,$(TEST_SRCS:.cpp=.o))
+
 GTEST_OBJS = gtest.o gtest_main.o
 ALL_OBJS+= $(TEST_OBJS) $(GTEST_OBJS)
 

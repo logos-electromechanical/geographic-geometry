@@ -4,25 +4,27 @@
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
-#include <ofstream>
+#include <fstream>
 #include "geogeometry.hpp"
 #include "rapidjson/rapidjson.h"
+#include "rapidjson/document.h"
 #include "test_utilities.hpp"
 
 using namespace rapidjson;
 using namespace std;
+using namespace GeoGeometry;
 
 #define TOL (0.00001)	// Tolerance for floating point comparisons
 
 class PositionTest : public ::testing::Test {
-public:
-	PositionTest () {
-		srand(time(NULL));
-		logfile.open("position_test.log", std::fstream::out | std::fstream::app);
-	}
+	public:
+		PositionTest () {
+			srand(time(NULL));
+			logfile.open("position_test.log", std::fstream::out | std::fstream::app);
+		}
 
-	ofstream logfile;
-}
+		ofstream logfile;
+};
 
 TEST (PositionTest, Validity) {
 	logfile << "=================================================" << endl;
@@ -72,7 +74,7 @@ TEST (PositionTest, JSON_Valid) {
 	logfile << "Testing JSON pack/unpack" << endl;
 	logfile << "=================================================" << endl;
 
-	for (i = 0; i < TESTLEN; i++) {
+	for (int i = 0; i < TESTLEN; i++) {
 		StringBuffer buf;
 		Writer<StringBuffer> writer(buf);
 		Position p = makePosition(drand(-180.0, 180.0), drand(-90.0, 90.0), drand(-1000000,100000));
@@ -90,7 +92,7 @@ TEST (PositionTest, JSON_Valid) {
 		EXPECT_TRUE(toleranceEquals(getlat(p), getlat(p1), TOL));
 		EXPECT_TRUE(toleranceEquals(getele(p), getele(p1), TOL));
 	}
-	for (i = 0; i < TESTLEN; i++) {
+	for (int i = 0; i < TESTLEN; i++) {
 		StringBuffer buf;
 		Writer<StringBuffer> writer(buf);
 		Position p = makePosition(drand(-180.0, 180.0), drand(-90.0, 90.0));
@@ -108,14 +110,14 @@ TEST (PositionTest, JSON_Valid) {
 		EXPECT_TRUE(toleranceEquals(getlat(p), getlat(p1), TOL));
 		EXPECT_TRUE(toleranceEquals(getele(p), getele(p1), TOL));
 	}
-	for (i = 0; i < TESTLEN; i++) {
+	for (int i = 0; i < TESTLEN; i++) {
 		ostringstream buf;
 		double lon = drand(-180.0,180.0);
 		double lat = drand(-90.0,90.0);
 		buf << "[" << to_string(lon) << "," << to_string(lat) << "]";
-		logfile << "Test Position " << i << " : " << buf << endl;
+		logfile << "Test Position " << i << " : " << buf.str() << endl;
 		Document d;
-		d.Parse(buf.c_str());
+		d.Parse(buf.str().c_str());
 		Position p = loadPosition(d);
 		EXPECT_TRUE(positionValid(p));
 		EXPECT_TRUE(toleranceEquals(getlon(p), lon, TOL));
@@ -128,7 +130,7 @@ TEST (PositionTest, IsLeftTest) {
 	logfile << "=================================================" << endl;
 	logfile << "Testing isLeft() function" << endl;
 	logfile << "=================================================" << endl;
-	for (i = 0; i < 1000; i++) {
+	for (int i = 0; i < 1000; i++) {
 
 		// construct a random line segment 1000m long
 		Point s0(drand(-180.0,180.0), drand(-90.0, 90.0));
