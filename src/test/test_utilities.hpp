@@ -41,9 +41,9 @@ double inline test_min(double a, double b) {
 	return b;
 }
 
-double inline nm2meters(double a) {return (a/1852);}
-double inline meters2nm(double a) {return (a*1852);}
+double inline nm2meters(double a) {return (a*1852);}
+double inline meters2nm(double a) {return (a/1852);}
 
-#define TESTLEN	(1000)
+#define TESTLEN	(10)
 
 #endif /* TEST_UTILITIES */

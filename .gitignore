@@ -3,6 +3,8 @@
 *.lo
 *.o
 *.obj
+*.d
+unit_tests
 
 # Precompiled Headers
 *.gch
@@ -27,3 +29,6 @@
 *.exe
 *.out
 *.app
+
+# logs
+*.log

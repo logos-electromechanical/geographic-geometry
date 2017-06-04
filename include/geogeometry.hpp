@@ -111,7 +111,7 @@ namespace GeoGeometry {
 
 	/// @brief returns a Position tuple with the given longitude, latitude, and elevation, in that order.
 	/// The ele parameter is optional and defaults to 0.0
-	inline Position makePosition (const double& lon, const double& lat, const double& ele = 0) {
+	inline Position makePosition (const double& lon, const double& lat, const double& ele = 0.0) {
 		return make_tuple(lon, lat, ele);
 	};
 
@@ -135,10 +135,9 @@ namespace GeoGeometry {
 	/// @brief creates a GeoJSON position array from the given Position in the given Document
 	inline Value packPosition (const Position& p, Document& d) {
 		Value v(kArrayType);
-		Value i(kNumberType);
-		v.PushBack(i.SetDouble(getlon(p)), d.GetAllocator());
-		v.PushBack(i.SetDouble(getlat(p)), d.GetAllocator());
-		v.PushBack(i.SetDouble(getele(p)), d.GetAllocator());
+		v.PushBack(Value().SetDouble(getlon(p)), d.GetAllocator());
+		v.PushBack(Value().SetDouble(getlat(p)), d.GetAllocator());
+		v.PushBack(Value().SetDouble(getele(p)), d.GetAllocator());
 		return v;
 	}
 
@@ -155,6 +154,8 @@ namespace GeoGeometry {
 
 	/// @brief determine whether a collinear point lies in a segment
 	/// This function was derived from http://geomalgorithms.com/a05-_intersect-1.html
+	/// Note that this has only been tested to +/- 80 deg latitude. It will also fail
+	/// for segments that cross the antimeridian due to ambiguity. 
 	/// @param p the point to test
 	/// @param s0 the start of the segment to test
 	/// @param s1 the end of the segment to test
@@ -222,8 +223,13 @@ namespace GeoGeometry {
 	///@brief checks whether a given Point or Location is within the giving bounding box
 	inline bool bboxContains (const BoundingBox& b, const Position& p) {
 		if (!bboxValid(b)) return false;
-		return ((getlon(p) <= getlon(getne(b))) && (getlon(p) >= getlon(getsw(b))) &&
-				(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
+		if (getlon(getne(b)) > getlon(getsw(b))) {	// this checks that the bounding box does not cross the antimeridian
+			return ((getlon(p) <= getlon(getne(b))) && (getlon(p) >= getlon(getsw(b))) &&
+					(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
+		} else { // this handles the case where the bounding box crosses the antimeridian
+			return (((getlon(p) <= getlon(getne(b))) || (getlon(p) >= getlon(getsw(b)))) &&
+					(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
+		}
 	}
  
 	// utility functions
@@ -503,11 +509,11 @@ namespace GeoGeometry {
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val reference to a GeoJSON object
-			Point (Value& val) : GeometryRoot(val) {};
+			Point (Value& val) {load(&val);};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val pointer to a GeoJSON object
-			Point (Value* val) : GeometryRoot(val) {};
+			Point (Value* val) {load(val);};
 
 			/// @brief populated this point from a GeoJSON object
 			/// @param val pointer to a GeoJSON object
@@ -572,7 +578,10 @@ namespace GeoGeometry {
 					case CourseTypeEnum::Approximate: {
 						double deltalat = metersPerDegreeLat(getlat())*(getlat() - GeoGeometry::getlat(dest));
 						double deltalon = metersPerDegreeLon(getlat())*(getlon() - GeoGeometry::getlon(dest));
-						return rad2deg(atan2(deltalon, deltalat));
+						double result = rad2deg(atan2(-deltalon, -deltalat));
+						if (result > 360.0) result -= 360.0;
+						if (result < 0.0) result += 360;
+						return result;
 						break;
 					}
 					default:
@@ -591,7 +600,7 @@ namespace GeoGeometry {
 				double azi1, azi2, dist;
 				switch (type) {
 					case CourseTypeEnum::GreatCircle: {
-						Geodesic::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), azi1, azi2);
+						Geodesic::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), dist, azi1, azi2);
 						return dist;
 						break;
 					}
@@ -634,8 +643,8 @@ namespace GeoGeometry {
 			/// and distance of the geodesic
 			/// @returns the projected position
 			Position project (const TwoVector& projection, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				if ((!this->isValid()) || (!projection.isValid())) return makePosition(NAN,NAN);
-				Position p = makePosition(NAN,NAN);
+				if ((!this->isValid()) || (!projection.isValid())) return makePosition(NAN,NAN,0.0);
+				Position p = makePosition(getlon(),getlat(),0.0);
 				switch (type) {
 					case CourseTypeEnum::GreatCircle: {
 						Geodesic::WGS84().Direct(getlat(), getlon(), projection.angleDeg(), projection.mag(), GeoGeometry::getlat(p), GeoGeometry::getlon(p));
@@ -653,6 +662,9 @@ namespace GeoGeometry {
 					default:
 						break;
 				}
+				// normalize longitude
+				if (GeoGeometry::getlon(p) > 180.0) GeoGeometry::getlon(p) -= 360;
+				if (GeoGeometry::getlon(p) < -180.0) GeoGeometry::getlon(p) += 360;
 				return p;
 			};
 
@@ -663,7 +675,7 @@ namespace GeoGeometry {
 			
 			const double& getlon () const {return GeoGeometry::getlon(_posn);};
 			const double& getlat () const {return GeoGeometry::getlat(_posn);};
-			const double& getele () const {return GeoGeometry::getlon(_posn);};
+			const double& getele () const {return GeoGeometry::getele(_posn);};
 
 			friend bool inline operator== (Point& a, Point& b) {
 				return (a.getPosition() == b.getPosition());
@@ -712,6 +724,8 @@ namespace GeoGeometry {
 											CourseTypeEnum type = CourseTypeEnum::RhumbLine);
 
 	/// @brief determine whether a point is to the left of a given line
+	/// Note: this may not work at high latitudes (tested to +/- 80), and gives wrong 
+	/// answers for segments that cross the antimeridian due to ambiguity. 
 	/// @param p the Position of the point to test
 	/// @param s0 a Position on the line to test
 	/// @param s1 another Position on the line to test
@@ -719,8 +733,8 @@ namespace GeoGeometry {
 	/// == 0 if p is on the line s
 	/// < 0 if p is to the right of line s
 	inline double isLeft (const Position& p, const Position& s0, const Position& s1) {
-		return (getlat(s1) - getlat(s0))*(getlon(p) - getlon(s0)) - 
-				(getlat(p) - getlat(s0))*(getlon(s1) - getlon(s0));
+		return (((getlon(s1) - getlon(s0)) * (getlat(p) - getlat(s0))) - 
+				((getlon(p) - getlon(s0)) * (getlat(s1) - getlat(s0))));
 	};
 
 	/// @brief comparison function for sorting Positions by latitude
@@ -1562,7 +1576,7 @@ namespace GeoGeometry {
 		double D = u.perp(v);
 
 		if (fabs(D) < smallnum)	{								// S1 & S2 are parallel
-			if ((u.perp(v) != 0) || v.perp(w) != 0) return 0;	// They are not collinear
+			if ((u.perp(w) != 0) || v.perp(w) != 0) return 0;	// They are not collinear
 			// check if they are degenerate points
 			double du = u * u;
 			double dv = v * v;
@@ -1608,7 +1622,7 @@ namespace GeoGeometry {
 			if ((sI < 0) || (sI > 1)) return 0;	// no intersection
 			double tI = u.perp(w)/D;			// get the intersect parameters for s2
 			if ((tI < 0) || (tI > 1)) return 0;	// no intersection
-			intersect0 = Point(s10.project(u * sI, type));
+			intersect0 = Point(s11.project((u * (-sI)), type));
 			return 1;
 		}
 	}
@@ -1616,7 +1630,7 @@ namespace GeoGeometry {
 	/// @brief generates a pointer to a new geometry object from the given GeoJSON object
 	/// @param val pointer to a GeoJSON object
 	/// @returns a pointer to a new GeoJSON object to a nullptr if the passed object is not valid GeoJSON
-	GeometryRoot* GeometryRoot::factory (Value* val) {
+	inline GeometryRoot* GeometryRoot::factory (Value* val) {
 		if (!val) return nullptr;
 		Value *valtype = Pointer("/type").Get(*val);
 		if (valtype && valtype->IsString()) {

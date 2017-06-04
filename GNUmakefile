@@ -28,18 +28,18 @@ LDLIBS += -lGeographic
 
 export OPTS
 
-VPATH=src
+VPATH=src/test
 
 all: test
 test: unit_tests
-	rm *.log
+	rm -f *.log
 	./unit_tests
 .PHONY: all test
 
-TEST_SRCS = position_test.o
-TEST_SRCS += boundingbox_test.o
-TEST_SRCS += point_test.o
-TEST_SRCS += twovector_test.o
+TEST_SRCS = position_test.cpp
+TEST_SRCS += boundingbox_test.cpp
+TEST_SRCS += twovector_test.cpp
+TEST_SRCS += point_test.cpp
 
 TEST_OBJS = $(addprefix src/test/,$(TEST_SRCS:.cpp=.o))
 
@@ -56,6 +56,12 @@ unit_tests: $(TEST_OBJS) $(GTEST_OBJS)
 # those in.
 gtest.o: $(GTEST_DIR) $(GTEST_INC)
 	$(CXX) $(CXXFLAGS) -I $(GTEST_INC) -I $(GTEST_DIR) -c -o $@ $(GTEST_DIR)/src/gtest-all.cc
+gtest_main.o: $(GTEST_DIR) $(GTEST_INC)
+	$(CXX) $(CXXFLAGS) -I $(GTEST_INC) -I $(GTEST_DIR) -c -o $@ $(GTEST_DIR)/src/gtest_main.cc
+
+clean:
+	rm -f src/test/*.o
+	rm -f src/test/*.d
 #gtest_main.o: $(GTEST_DIR)/src/gtest_main.cc
-gtest_main.o: gtest_main.cc
-	$(CXX) $(CXXFLAGS) -I $(GTEST_INC) -c -o $@ $^
+#gtest_main.o: gtest_main.cc
+#	$(CXX) $(CXXFLAGS) -I $(GTEST_INC) -c -o $@ $^

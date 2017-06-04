@@ -4,15 +4,19 @@
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
-#include <ofstream>
+#include <fstream>
 #include "geogeometry.hpp"
 #include "rapidjson/rapidjson.h"
+#include "rapidjson/document.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/writer.h"
 #include "test_utilities.hpp"
 
 using namespace rapidjson;
 using namespace std;
+using namespace GeoGeometry;
 
-#define TOL 0.0000001	// Tolerance for floating point comparisons
+#define TOL 0.00001	// Tolerance for floating point comparisons
 
 class VectorTest : public ::testing::Test {
 public:
@@ -21,16 +25,16 @@ public:
 		logfile.open("twovector_test.log", std::fstream::out | std::fstream::app);
 	}
 	ofstream logfile;
-}
+};
 
-TEST(VectorTest, DefaultConstructor) {
+TEST_F (VectorTest, DefaultConstructor) {
 	TwoVector v;
 	EXPECT_FALSE(v.isValid());
-	EXPECT_EQ(v.x(), NAN);
-	EXPECT_EQ(v.y(), NAN);
+	EXPECT_TRUE(isnan(v.x()));
+	EXPECT_TRUE(isnan(v.y()));
 }
 
-TEST(VectorTest, NumericalConstructor) {
+TEST_F (VectorTest, NumericalConstructor) {
 	for (int i = 0; i < TESTLEN; i++) {
 		double x = drand(-100000.0, 100000.0);
 		double y = drand(-100000.0, 100000.0);
@@ -45,22 +49,22 @@ TEST(VectorTest, NumericalConstructor) {
 	}
 }
 
-TEST(VectorTest, JSON_Constructor) {
+TEST_F (VectorTest, JSON_Constructor) {
 	for (int i = 0; i < TESTLEN; i++) {
 		ostringstream buf;
 		double x = drand(-100000.0, 100000.0);
 		double y = drand(-100000.0, 100000.0);
 		buf << "{\"x\":" << to_string(x) << ",\"y\":"<< to_string(y) << "}" << endl;
 		Document d;
-		d.Parse(buf.c_str());
+		d.Parse(buf.str().c_str());
 		TwoVector v(d);
 		EXPECT_TRUE(v.isValid());
-		EXPECT_EQ(v.x(), x);
-		EXPECT_EQ(v.y(), y);
+		EXPECT_TRUE(toleranceEquals(v.x(), x, TOL));
+		EXPECT_TRUE(toleranceEquals(v.y(), y, TOL));
 	}
 }
 
-TEST(VectorTest, JSON_Object) {
+TEST_F (VectorTest, JSON_Object) {
 	for (int i = 0; i < TESTLEN; i++) {
 		Document d;
 		double x = drand(-100000.0, 100000.0);
@@ -68,8 +72,8 @@ TEST(VectorTest, JSON_Object) {
 		TwoVector v(x,y);
 		EXPECT_TRUE(v.isValid());
 		Value j = v.pack(d);
-		EXPECT_TRUE(j.hasMember("x"));
-		EXPECT_TRUE(j.hasMember("y"));
+		EXPECT_TRUE(j.HasMember("x"));
+		EXPECT_TRUE(j.HasMember("y"));
 		Value *xptr = Pointer("/x").Get(j);
 		Value *yptr = Pointer("/y").Get(j);
 		EXPECT_FALSE(xptr == nullptr);
@@ -83,7 +87,7 @@ TEST(VectorTest, JSON_Object) {
 	}
 }
 
-TEST (VectorTest, AngleMagOutput) {
+TEST_F (VectorTest, AngleMagOutput) {
 	TwoVector v { 1 , 0 };
 	TwoVector s { 3 , 4 };
 	EXPECT_TRUE(v.isValid());
@@ -96,7 +100,7 @@ TEST (VectorTest, AngleMagOutput) {
 	EXPECT_TRUE(toleranceEquals(s.angleDeg(), 53.1301023, TOL));
 }
 
-TEST (VectorTest, PolarInterpretation) {
+TEST_F (VectorTest, PolarInterpretation) {
 	TwoVector u;
 	TwoVector v { 1 , 0 };
 
@@ -136,7 +140,7 @@ TEST (VectorTest, PolarInterpretation) {
 	EXPECT_TRUE(toleranceEquals(u.angleDeg(), 45.0, TOL));
 }
 
-TEST (VectorTest, AngleMagInput) {
+TEST_F (VectorTest, AngleMagInput) {
 	TwoVector v { 1 , 0 };
 	EXPECT_TRUE(v.isValid());
 	EXPECT_TRUE(toleranceEquals(v.mag(), 1.0, TOL));
@@ -164,7 +168,7 @@ TEST (VectorTest, AngleMagInput) {
 	EXPECT_TRUE(toleranceEquals(v.y(), 3.0, TOL));
 }
 
-TEST (VectorTest, GetVectorRad) {
+TEST_F (VectorTest, GetVectorRad) {
 	TwoVector v = TwoVector::getVectorRad(M_PI_4, 2.0);
 	EXPECT_TRUE(v.isValid());
 	EXPECT_TRUE(toleranceEquals(v.mag(), 2.0, TOL));
@@ -174,7 +178,7 @@ TEST (VectorTest, GetVectorRad) {
 	EXPECT_TRUE(toleranceEquals(v.y(), sqrt(2.0), TOL));
 }
 
-TEST (VectorTest, VectorRotations) {
+TEST_F (VectorTest, VectorRotations) {
 	TwoVector v {2, 0};
 	EXPECT_TRUE(v.isValid());
 	EXPECT_TRUE(toleranceEquals(v.mag(), 2.0, TOL));
@@ -231,7 +235,7 @@ TEST (VectorTest, VectorRotations) {
 	EXPECT_TRUE(toleranceEquals(v.y(), 0.0, TOL));
 }
 
-TEST (VectorTest, VectorAddition) {
+TEST_F (VectorTest, VectorAddition) {
 	TwoVector u {2, 0};
 	TwoVector v {0, 1};
 	TwoVector s;
@@ -269,7 +273,7 @@ TEST (VectorTest, VectorAddition) {
 	EXPECT_TRUE(toleranceEquals(s.y(), 1.0, TOL));	
 }
 
-TEST (VectorTest, ScalarMultiplication) {
+TEST_F (VectorTest, ScalarMultiplication) {
 	TwoVector s;
 	TwoVector v {3, 4};
 	EXPECT_TRUE(v.isValid());
@@ -312,7 +316,7 @@ TEST (VectorTest, ScalarMultiplication) {
 	EXPECT_TRUE(toleranceEquals(s.y(), 3, TOL));
 }
 
-TEST (VectorTest, DotProduct) {
+TEST_F (VectorTest, DotProduct) {
 	TwoVector s {1, 0};
 	TwoVector u {0, 1};
 	TwoVector v {3, 4};
@@ -332,7 +336,7 @@ TEST (VectorTest, DotProduct) {
 	EXPECT_TRUE(toleranceEquals(w, 0, TOL));
 }
 
-TEST (VectorTest, PerProduct) {
+TEST_F (VectorTest, PerpProduct) {
 	TwoVector s {1, 0};
 	TwoVector u {0, 1};
 	TwoVector v {3, 4};
