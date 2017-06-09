@@ -39,7 +39,8 @@ using namespace rapidjson;
 namespace GeoGeometry {
 
 	// Useful constants
-	const double smallnum = 0.0000000001;
+	const double LatLonTolerance = 0.00001;
+	const double MeterTolerance = 2.0;
 
 	/** @enum CourseType
 	 * 
@@ -94,143 +95,180 @@ namespace GeoGeometry {
 		Undefined
 	};
 
-	/// @brief represents a position. Elements are lon in degrees, lat in degrees, and elevation in meters
-	typedef tuple<double, double, double> Position;
-	/// @brief represents a bounding box. Elements are the southwest and northeast corners
-	typedef tuple<Position, Position> BoundingBox;
+	class Position {
+		public:
+			Position () {};
+			Position (const double& lon, const double& lat, const double& ele = 0) :
+				_lat(lat), _lon(lon), _ele(ele) {};
+			Position (Value& v) {load(v);};
+			Position (Value* v) {load(v);};
 
-	/// @brief retrieve the the longitude from a Position tuple
-	inline double& getlon (Position& p) {return get<0>(p);};
-	inline const double& getlon (const Position& p) {return get<0>(p);};
-	/// @brief retrieve the the latitude from a Position tuple
-	inline double& getlat (Position& p) {return get<1>(p);};
-	inline const double& getlat (const Position& p) {return get<1>(p);};
-	/// @brief retrieve the the elevation from a Position tuple
-	inline double& getele (Position& p) {return get<2>(p);};
-	inline const double& getele (const Position& p) {return get<2>(p);};
+			/// @brief populates this Position object from a GeoJSON array
+			inline bool load (Value& v) {return load(&v);};
+			inline bool load (Value* v) {
+				if (v == nullptr) return false;
+				Value *vp = nullptr;
+				if (v->IsArray()) {
+					vp = Pointer("/0").Get(*v);
+					if (vp && vp->IsDouble()) _lon = vp->GetDouble();
+					vp = Pointer("/1").Get(*v);
+					if (vp && vp->IsDouble()) _lat = vp->GetDouble();
+					vp = Pointer("/2").Get(*v);
+					if (vp && vp->IsDouble()) _ele = vp->GetDouble();
+				} 
+				return this->isValid();
+			};
 
-	/// @brief returns a Position tuple with the given longitude, latitude, and elevation, in that order.
-	/// The ele parameter is optional and defaults to 0.0
-	inline Position makePosition (const double& lon, const double& lat, const double& ele = 0.0) {
-		return make_tuple(lon, lat, ele);
+			inline Value pack (Document& d) {
+				Value v(kArrayType);
+				v.PushBack(Value().SetDouble(this->lon()), d.GetAllocator());
+				v.PushBack(Value().SetDouble(this->lat()), d.GetAllocator());
+				v.PushBack(Value().SetDouble(this->ele()), d.GetAllocator());
+				return v;
+			};
+
+			inline const double& lat () const {return _lat;};
+			inline const double& lon () const {return _lon;};
+			inline const double& ele () const {return _ele;};
+			inline double& lat () {return _lat;};
+			inline double& lon () {return _lon;};
+			inline double& ele () {return _ele;};
+			inline bool lat (const double& l) {
+				if (!isfinite(l)) return false;
+				if (fabs(l) > 90.0) return false;
+				_lat = l;
+				return isValid();
+			};
+			inline bool lon (const double& l) {
+				if (!isfinite(l)) return false;
+				if (fabs(l) > 180.0) return false;
+				_lon = l;
+				return isValid();
+			};
+			inline bool ele (const double& e) {
+				if (!isfinite(e)) return false;
+				_ele = e;
+				return isValid();
+			}
+
+			inline void norm () {
+				while (_lon > 180.0) _lon -= 360.0;
+				while (_lon < -180.0) _lon += 360.0;
+			}
+
+			inline bool isValid () const {
+				return (isfinite(_lat) && isfinite(_lon) && isfinite(_ele) &&
+					(fabs(_lon) < 180.0) && (fabs(_lat) < 90.0));
+			};
+
+			/// @brief checks whether the Position p is north of this position
+			inline bool isNorth (const Position& p) const {
+				if (p.lat() > this->lat()) return true;
+				return false;
+			};
+
+			/// @brief checks whether the Position p is to the east of this position and west of meridian l0
+			inline bool isEast (const Position& p, const double& l0) const {
+				// shift all the longitudes to 0-360 degrees
+				double testlon = (p.lon() + 180.0);
+				double thislon = (this->lon() + 180.0);
+				double limitlon = (l0 + 180.0);
+				// handle the cases where either testlon or limitlon are east over the antimeridian from thislon
+				if (limitlon < thislon) {				// check whether limit is east over the antimeridian
+					if (testlon < limitlon) {			// testlon is east of the antimeridian and west of limitlon
+						return true;
+					} 
+				}
+				if (thislon < testlon) return true;
+				return false;
+
+			};
+
+			/// @brief compare whether two positions are equal
+			inline bool operator== (const Position& other) const {
+				return ((other.lat() == this->lat()) && 
+					(other.lon() == this->lon()));
+			}
+
+			/// @brief compare whether two positions are unequal
+			inline bool operator!= (const Position& other) const {
+				return ((other.lat() != this->lat()) || 
+					(other.lon() != this->lon()));
+			}
+
+
+		private:
+			double _lat = NAN;
+			double _lon = NAN;
+			double _ele = NAN;
 	};
 
-	/// @brief creates a Postion tuple from a GeoJSON array
-	inline Position loadPosition (Value& v) {
-		double lon = NAN;
-		double lat = NAN;
-		double ele = 0;
-		Value *vp = nullptr;
-		if (v.IsArray()) {
-			vp = Pointer("/0").Get(v);
-			if (vp && vp->IsDouble()) lon = vp->GetDouble();
-			vp = Pointer("/1").Get(v);
-			if (vp && vp->IsDouble()) lat = vp->GetDouble();
-			vp = Pointer("/2").Get(v);
-			if (vp && vp->IsDouble()) ele = vp->GetDouble();
-		} 
-		return makePosition(lon, lat, ele);
+	class BoundingBox {
+		public:
+			BoundingBox () {};
+			BoundingBox (const Position& ne, const Position& sw) :
+				_ne(ne), _sw(sw) {};
+			BoundingBox (const double& ne_lon, const double& ne_lat, 
+				const double& sw_lon, const double& sw_lat) :
+				_ne(ne_lon, ne_lat), _sw(sw_lon, sw_lat) {};
+			BoundingBox (Value& v) {load(v);};
+			BoundingBox (Value* v) {load(v);};
+
+			inline bool load (Value& v) {return load(&v);};
+			inline bool load (Value* v) {
+				if (v == nullptr) return false;
+				Value *vp = nullptr;
+				if (v->IsArray()) {
+					vp = Pointer("/0").Get(*v);
+					if (vp && vp->IsDouble()) _sw.lon(vp->GetDouble());
+					vp = Pointer("/1").Get(*v);
+					if (vp && vp->IsDouble()) _sw.lat(vp->GetDouble());
+					vp = Pointer("/2").Get(*v);
+					if (vp && vp->IsDouble()) _ne.lon(vp->GetDouble());
+					vp = Pointer("/3").Get(*v);
+					if (vp && vp->IsDouble()) _ne.lat(vp->GetDouble());
+				}
+				return isValid();
+			}
+	
+			/// @brief creates a GeoJSON bounding box array from the given BoundingBox in the given Document
+			inline Value pack (Document& d) {
+				Value v(kArrayType);
+				Value i(kNumberType);
+				v.PushBack(i.SetDouble(_sw.lon()), d.GetAllocator());
+				v.PushBack(i.SetDouble(_sw.lat()), d.GetAllocator());
+				v.PushBack(i.SetDouble(_ne.lon()), d.GetAllocator());
+				v.PushBack(i.SetDouble(_ne.lat()), d.GetAllocator());
+				return v;
+			};
+
+			/// @brief checks whether a BoundingBox refers to a real bounding box
+			inline bool isValid () {
+				return(_sw.isValid() && _ne.isValid() &&
+						(_ne.lat() > _sw.lat()));
+			};
+
+			/// @brief checks whether a given location is within this bounding box
+			inline bool contains (Position& p) {
+				if (!(this->isValid())) return false;
+				if (_ne.lon() > _sw.lon()) {	// this checks that the bounding box does not cross the antimeridian
+					return ((p.lon() <= _ne.lon()) && (p.lon() >= _sw.lon()) &&
+							(p.lat() <= _ne.lat()) && (p.lat() >= _sw.lat()));
+				} else { // this handles the case where the bounding box crosses the antimeridian
+					return (((p.lon() <= _ne.lon()) || (p.lon() >= _sw.lon())) &&
+							(p.lat() <= _ne.lat()) && (p.lat() >= _sw.lat()));
+				}
+			}
+
+			inline Position& ne () {return _ne;};
+			inline Position& sw () {return _sw;};
+			inline const Position& ne () const {return _ne;};
+			inline const Position& sw () const {return _sw;};
+
+		private:
+			Position _ne;
+			Position _sw;
 	};
-
-	/// @brief creates a GeoJSON position array from the given Position in the given Document
-	inline Value packPosition (const Position& p, Document& d) {
-		Value v(kArrayType);
-		v.PushBack(Value().SetDouble(getlon(p)), d.GetAllocator());
-		v.PushBack(Value().SetDouble(getlat(p)), d.GetAllocator());
-		v.PushBack(Value().SetDouble(getele(p)), d.GetAllocator());
-		return v;
-	}
-
-	/// @brief checks whether a Position refers to a real point
-	inline bool positionValid (const Position& p) {
-		return (isfinite(getlon(p)) && 
-				isfinite(getlat(p)) &&
-				isfinite(getele(p)) &&
-				(getlon(p) <= 180.0) &&
-				(getlon(p) >= -180.0) &&
-				(getlat(p) <= 90.0) &&
-				(getlat(p) >= -90.0));
-	}
-
-	/// @brief determine whether a collinear point lies in a segment
-	/// This function was derived from http://geomalgorithms.com/a05-_intersect-1.html
-	/// Note that this has only been tested to +/- 80 deg latitude. It will also fail
-	/// for segments that cross the antimeridian due to ambiguity. 
-	/// @param p the point to test
-	/// @param s0 the start of the segment to test
-	/// @param s1 the end of the segment to test
-	/// @returns true if the point lies in the segment
-	inline bool inSegment(const Position& p, const Position& s0, const Position& s1) {
-		if (fabs(getlat(s0) - getlat(s1)) > smallnum) {		// the segment is not e-w
-			if ((getlat(s0) <= getlat(p)) && (getlat(p) <= getlat(s1))) return true;
-			if ((getlat(s0) >= getlat(p)) && (getlat(p) >= getlat(s1))) return true;
-		} else {											// segment is e-w
-			if ((getlon(s0) <= getlon(p)) && (getlon(p) <= getlon(s1))) return true;
-			if ((getlon(s0) >= getlon(p)) && (getlon(p) >= getlon(s1))) return true;
-		}
-		return false;
-	}
-
-	/// @brief retrieves the southwest corner of the given BoundingBox
-	inline Position& getsw (BoundingBox& bb) {return get<0>(bb);};
-	inline const Position& getsw (const BoundingBox& bb) {return get<0>(bb);};
-	/// @brief retrieves the northeast corner of the given BoundingBox
-	inline Position& getne (BoundingBox& bb) {return get<1>(bb);};
-	inline const Position& getne (const BoundingBox& bb) {return get<1>(bb);};
-	/// @brief creates a bounding box from the given positions
-	inline BoundingBox makeBBox (const Position& sw, const Position& ne) {
-		return make_tuple(sw, ne);
-	};
-
-	/// @brief creates a BoundBox from a GeoJSON bounding box array
-	inline BoundingBox loadBBox (Value& v) {
-		double swlon = NAN;
-		double swlat = NAN;
-		double nelon = NAN;
-		double nelat = NAN;
-		Value *vp = nullptr;
-		if (v.IsArray()) {
-			vp = Pointer("/0").Get(v);
-			if (vp && vp->IsDouble()) swlon = vp->GetDouble();
-			vp = Pointer("/1").Get(v);
-			if (vp && vp->IsDouble()) swlat = vp->GetDouble();
-			vp = Pointer("/2").Get(v);
-			if (vp && vp->IsDouble()) nelon = vp->GetDouble();
-			vp = Pointer("/3").Get(v);
-			if (vp && vp->IsDouble()) nelat = vp->GetDouble();
-		}
-		return makeBBox(makePosition(swlon, swlat), makePosition(nelon, nelat));
-	};
-
-	/// @brief creates a GeoJSON bounding box array from the given BoundingBox in the given Document
-	inline Value packBBox (const BoundingBox& b, Document& d) {
-		Value v(kArrayType);
-		Value i(kNumberType);
-		v.PushBack(i.SetDouble(getlon(getsw(b))), d.GetAllocator());
-		v.PushBack(i.SetDouble(getlat(getsw(b))), d.GetAllocator());
-		v.PushBack(i.SetDouble(getlon(getne(b))), d.GetAllocator());
-		v.PushBack(i.SetDouble(getlat(getne(b))), d.GetAllocator());
-		return v;
-	};
-
-	/// @brief checks whether a BoundingBox refers to a real bounding box
-	inline bool bboxValid (const BoundingBox& b) {
-		return(positionValid(getsw(b)) &&
-				positionValid(getne(b)) &&
-				(getlat(getne(b)) > getlat(getsw(b))));
-	};
-
-	///@brief checks whether a given Point or Location is within the giving bounding box
-	inline bool bboxContains (const BoundingBox& b, const Position& p) {
-		if (!bboxValid(b)) return false;
-		if (getlon(getne(b)) > getlon(getsw(b))) {	// this checks that the bounding box does not cross the antimeridian
-			return ((getlon(p) <= getlon(getne(b))) && (getlon(p) >= getlon(getsw(b))) &&
-					(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
-		} else { // this handles the case where the bounding box crosses the antimeridian
-			return (((getlon(p) <= getlon(getne(b))) || (getlon(p) >= getlon(getsw(b)))) &&
-					(getlat(p) <= getlat(getne(b))) && (getlat(p) >= getlat(getsw(b))));
-		}
-	}
  
 	// utility functions
 	inline double deg2rad (double deg) { return deg * ( M_PI / 180.0 ); }	/**< Convert degrees to radians */
@@ -249,18 +287,6 @@ namespace GeoGeometry {
 		double e = 0.0818192;	// WGS84 flattening
 		return ((M_PI * a * cos(phi)) / (180 * sqrt(1 - (e * e * pow(sin(phi),2)))));
 	};
-
-	/// @brief compare whether two positions are equal
-	inline bool operator== (Position& a, Position& b) {
-		if ((getlat(a) == getlat(b)) && (getlon(a) == getlon(b))) return true;
-		return false;
-	}
-
-	/// @brief compare whether two positions are unequal
-	inline bool operator!= (Position& a, Position& b) {
-		if (a == b) return false;
-		return true;
-	}
 
 	/** @class TwoVector
 	 *
@@ -418,15 +444,6 @@ namespace GeoGeometry {
 			double _y = NAN;	 		
 	};
 
-	// forward declarations of subclasses to make the factory work
-	// class Point;
-	// class MultiPoint;
-	// class LineString;
-	// class MultiLineString;
-	// class Polygon;
-	// class MultiPolygon;
-	// class GeometryCollection;
-
 	/** @class GeometryRoot
 	 *
 	 * @brief is a base class for representing GeoJSON geometry objects
@@ -445,7 +462,7 @@ namespace GeoGeometry {
 			// @brief populates a geometry object from a GeoJSON object
 			// @param val reference to a GeoJSON object
 			// @returns true if object is successfully populated
-			bool load (Value& val) {return load(&val);};
+			virtual bool load (Value& val) {return load(&val);};
 			// @brief populated a geometry object from a GeoJSON object
 			// @param val pointer to a GeoJSON object
 			// @returns true if object is successfully populated
@@ -463,7 +480,7 @@ namespace GeoGeometry {
 			const GeometryType& gettype () const {return _mytype;};
 
 			/// @brief fetches the bounding box of the current object, and generates it if it has not yet been generated
-			const BoundingBox& getbox () {
+			const BoundingBox& bbox () {
 				if (!_hasbox) _hasbox = makebox();
 				return _bbox;
 			}
@@ -490,13 +507,11 @@ namespace GeoGeometry {
 	class Point : public GeometryRoot {
 		public:	
 			/// @brief creates a blank Point
-			Point () : GeometryRoot(GeometryType::Point), 
-				_posn(makePosition(NAN, NAN, 0)) {};
+			Point () : GeometryRoot(GeometryType::Point) {};
 
 			/// @brief creates a Point at the given position
 			/// @param posn the desired position
-			Point (const Position& posn) : 
-				_posn(posn), 
+			Point (const Position& posn) : _posn(posn), 
 				GeometryRoot(GeometryType::Point) {};
 
 			/// @brief creates a Point at the given position
@@ -505,7 +520,7 @@ namespace GeoGeometry {
 			/// @param ele the desired elevation (meters above datum)
 			Point (const double lon, const double lat, const double ele = 0.0)  : 
 				GeometryRoot(GeometryType::Point),
-				_posn(makePosition(lon, lat, ele)) {};
+				_posn(lon, lat, ele) {};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val reference to a GeoJSON object
@@ -518,7 +533,8 @@ namespace GeoGeometry {
 			/// @brief populated this point from a GeoJSON object
 			/// @param val pointer to a GeoJSON object
 			/// @returns true if object is successfully populated
-			bool load (Value* val) {
+			inline bool load (Value& val) {return load(&val);};
+			inline bool load (Value* val) {
 				if (!val) return false;
 				_mytype = GeometryType::Point;
 				if (val->IsObject()) {
@@ -528,11 +544,11 @@ namespace GeoGeometry {
 						if (typeptr->IsString() && 
 							(string(typeptr->GetString()) == "Point") &&
 							coordptr->IsArray()) {
-							_posn = loadPosition(*coordptr);
+							_posn.load(*coordptr);
 						} else return false;
 					} else return false;
 				} else if (val->IsArray() && (val->Size() > 1)) {
-					_posn = loadPosition(*val);
+					_posn.load(*val);
 				} else return false;
 				return isValid();
 			};
@@ -543,17 +559,18 @@ namespace GeoGeometry {
 			Value pack (Document& d) {
 				Value v(kObjectType);
 				v.AddMember("type", "Point", d.GetAllocator());
-				v.AddMember("coordinates", packPosition(_posn, d), d.GetAllocator());
+				v.AddMember("coordinates", _posn.pack(d), d.GetAllocator());
 				return v;
 			};
 
 			/// @brief creates a GeoJSON Point coordinate array from this Point
 			/// @param d the GeoJSON document to create the array in 
 			/// @returns the packed GeoJSON Point coordinates array
-			Value packArray (Document& d) {return packPosition(_posn, d);};
+			Value packArray (Document& d) {return _posn.pack(d);};
 
 			/// @brief returns a reference to the embedded position
-			Position& getPosition () {return _posn;};
+			Position& position () {return _posn;};
+			const Position& position () const {return _posn;};
 
 			/// @brief get a bearing from this Point to a distant position
 			/// @param dest the Position of the target
@@ -562,22 +579,22 @@ namespace GeoGeometry {
 			/// @returns the bearing to target in degrees from north. Returns NAN if
 			/// no valid bearing can be calculated
 			double bearing (const Position& dest, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				if ((!this->isValid()) || (!positionValid(dest))) return NAN;
+				if ((!this->isValid()) || (!dest.isValid())) return NAN;
 				double azi1, azi2, dist;
 				switch (type) {
 					case CourseTypeEnum::GreatCircle: {
-						Geodesic::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), azi1, azi2);
+						Geodesic::WGS84().Inverse(lat(), lon(), dest.lat(), dest.lon(), azi1, azi2);
 						return azi1;
 						break;
 					}
 					case CourseTypeEnum::RhumbLine:	{
-						Rhumb::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), dist, azi1);
+						Rhumb::WGS84().Inverse(lat(), lon(), dest.lat(), dest.lon(), dist, azi1);
 						return azi1;
 						break;
 					}
 					case CourseTypeEnum::Approximate: {
-						double deltalat = metersPerDegreeLat(getlat())*(getlat() - GeoGeometry::getlat(dest));
-						double deltalon = metersPerDegreeLon(getlat())*(getlon() - GeoGeometry::getlon(dest));
+						double deltalat = metersPerDegreeLat(lat())*(lat() - dest.lat());
+						double deltalon = metersPerDegreeLon(lat())*(lon() - dest.lon());
 						double result = rad2deg(atan2(-deltalon, -deltalat));
 						if (result > 360.0) result -= 360.0;
 						if (result < 0.0) result += 360;
@@ -596,22 +613,22 @@ namespace GeoGeometry {
 			/// a GreatCircle type will calculate the distance along the geodesic. 
 			/// @returns the distance to target in meters
 			double distance (const Position& dest, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				if ((!this->isValid()) || (!positionValid(dest))) return NAN;
+				if ((!this->isValid()) || (!dest.isValid())) return NAN;
 				double azi1, azi2, dist;
 				switch (type) {
 					case CourseTypeEnum::GreatCircle: {
-						Geodesic::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), dist, azi1, azi2);
+						Geodesic::WGS84().Inverse(lat(), lon(), dest.lat(), dest.lon(), dist, azi1, azi2);
 						return dist;
 						break;
 					}
 					case CourseTypeEnum::RhumbLine:	{
-						Rhumb::WGS84().Inverse(getlat(), getlon(), GeoGeometry::getlat(dest), GeoGeometry::getlon(dest), dist, azi1);
+						Rhumb::WGS84().Inverse(lat(), lon(), dest.lat(), dest.lon(), dist, azi1);
 						return dist;
 						break;
 					}
 					case CourseTypeEnum::Approximate: {
-						double deltalat = metersPerDegreeLat(getlat())*(getlat() - GeoGeometry::getlat(dest));
-						double deltalon = metersPerDegreeLon(getlat())*(getlon() - GeoGeometry::getlon(dest));
+						double deltalat = metersPerDegreeLat(lat())*(lat() - dest.lat());
+						double deltalon = metersPerDegreeLon(lat())*(lon() - dest.lon());
 						return sqrt((deltalon*deltalon) + (deltalat*deltalat));
 						break;
 					}
@@ -629,7 +646,7 @@ namespace GeoGeometry {
 			/// @returns a vector with a distance to the target in meters and an angle 
 			/// in degress from north. 
 			TwoVector target (const Position& dest, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				if ((!this->isValid()) || (!positionValid(dest))) return TwoVector {NAN,NAN};
+				if ((!this->isValid()) || (!dest.isValid())) return TwoVector {NAN,NAN};
 				TwoVector t {1,0};
 				t.rotateDeg(bearing(dest, type));
 				t *= distance(dest, type);
@@ -643,110 +660,66 @@ namespace GeoGeometry {
 			/// and distance of the geodesic
 			/// @returns the projected position
 			Position project (const TwoVector& projection, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				if ((!this->isValid()) || (!projection.isValid())) return makePosition(NAN,NAN,0.0);
-				Position p = makePosition(getlon(),getlat(),0.0);
+				if ((!this->isValid()) || (!projection.isValid())) return Position(NAN,NAN,0.0);
+				Position p = _posn;
 				switch (type) {
 					case CourseTypeEnum::GreatCircle: {
-						Geodesic::WGS84().Direct(getlat(), getlon(), projection.angleDeg(), projection.mag(), GeoGeometry::getlat(p), GeoGeometry::getlon(p));
+						Geodesic::WGS84().Direct(lat(), lon(), projection.angleDeg(), projection.mag(), p.lat(), p.lon());
 						break;
 					}
 					case CourseTypeEnum::RhumbLine: {
-						Rhumb::WGS84().Direct(getlat(), getlon(), projection.angleDeg(), projection.mag(), GeoGeometry::getlat(p), GeoGeometry::getlon(p));
+						Rhumb::WGS84().Direct(lat(), lon(), projection.angleDeg(), projection.mag(), p.lat(), p.lon());
 						break;
 					}
 					case CourseTypeEnum::Approximate: {
-						GeoGeometry::getlon(p) += projection.y()/metersPerDegreeLon(getlat());
-						GeoGeometry::getlat(p) += projection.x()/metersPerDegreeLat(getlat());
+						p.lon() += projection.y()/metersPerDegreeLon(lat());
+						p.lat() += projection.x()/metersPerDegreeLat(lat());
 						break;
 					}
 					default:
 						break;
 				}
 				// normalize longitude
-				if (GeoGeometry::getlon(p) > 180.0) GeoGeometry::getlon(p) -= 360;
-				if (GeoGeometry::getlon(p) < -180.0) GeoGeometry::getlon(p) += 360;
+				if (p.lon() > 180.0) p.lon() -= 360;
+				if (p.lon() < -180.0) p.lon() += 360;
 				return p;
 			};
 
 			bool isValid () const {
-				if (_mytype == GeometryType::Point) return (positionValid(_posn));
+				if (_mytype == GeometryType::Point) return (_posn.isValid());
 				return false;
 			};
 			
-			const double& getlon () const {return GeoGeometry::getlon(_posn);};
-			const double& getlat () const {return GeoGeometry::getlat(_posn);};
-			const double& getele () const {return GeoGeometry::getele(_posn);};
+			const double& lon () const {return _posn.lon();};
+			const double& lat () const {return _posn.lat();};
+			const double& ele () const {return _posn.ele();};
 
-			friend bool inline operator== (Point& a, Point& b) {
-				return (a.getPosition() == b.getPosition());
+			bool inline operator== (const Point& a) const {
+				return (a.position() == this->position());
 			}
 
-			friend bool inline operator!= (Point& a, Point& b) {
-				return (a.getPosition() != b.getPosition());
+			bool inline operator!= (const Point& a) const {
+				return (a.position() != this->position());
 			}
 
 		private:
 			Position _posn;
 			Point (GeometryType t) : GeometryRoot(t) {};
 			bool makebox () {
-				get<0>(_bbox) = _posn;
-				get<1>(_bbox) = _posn;
+				_bbox.ne() = _posn;
+				_bbox.sw() = _posn;
 				return true;
 			};
 	};
 
-	/// @brief return the point on a line segment closest to a point
-	/// Note that this function may behave strangely with great circle distances
-	/// This function was derived from http://geomalgorithms.com/a02-_lines.html
-	/// @param p is the point external to the line segment
-	/// @param s0 is one end of the line segment
-	/// @param s1 is the other end of the line segment
-	/// @param type the distance type used in this calculation
-	/// @returns the Position on the line segment closest to p
-	Position point2segment(const Point& p, const Point& s0, const Point& s1, 
-		const CourseTypeEnum type = CourseTypeEnum::RhumbLine);
-
-	/// @brief determines whether two line segments intersect
-	/// Note that this function may behave strangely with great circle distances
-	/// This function was derived from http://geomalgorithms.com/a05-_intersect-1.html
-	/// @param s10 start of the first line segment
-	/// @param s11 end of the first line segment
-	/// @param s20 start of the second line segment
-	/// @param s21 end of the second line segment
-	/// @param intersect0 this Position is set to the intersection point, 
-	/// or untouched if there is no intersection
-	/// @param intersect1 if the segments overlap, intersect1 is set to the 
-	/// other end of the overlapping segment, otherwise untouched
-	/// @returns 0 if no intersection, 1 if they intersect at a point, and 2 if they overlap
-	unsigned int segmentsIntersect (const Point& s10, const Point& s11, 
-											const Point& s20, const Point& s21,
-											Point& intersect0, Point& intersect1,
-											CourseTypeEnum type = CourseTypeEnum::RhumbLine);
-
-	/// @brief determine whether a point is to the left of a given line
-	/// Note: this may not work at high latitudes (tested to +/- 80), and gives wrong 
-	/// answers for segments that cross the antimeridian due to ambiguity. 
-	/// @param p the Position of the point to test
-	/// @param s0 a Position on the line to test
-	/// @param s1 another Position on the line to test
-	/// @returns > 0 if p is to the left of the line s
-	/// == 0 if p is on the line s
-	/// < 0 if p is to the right of line s
-	inline double isLeft (const Position& p, const Position& s0, const Position& s1) {
-		return (((getlon(s1) - getlon(s0)) * (getlat(p) - getlat(s0))) - 
-				((getlon(p) - getlon(s0)) * (getlat(s1) - getlat(s0))));
-	};
-
 	/// @brief comparison function for sorting Positions by latitude
 	inline bool latlt (const Position& a, const Position& b) {
-		if (getlat(a) < getlat(b)) return true;
-		return false;
+		return (a.lat() < b.lat());
 	}
 
 	/// @brief comparison function for sorting Positions by longitude
 	inline bool lonlt (const Position& a, const Position& b) {
-		if (getlon(a) < getlon(b)) return true;
-		return false;
+		return (a.lon() < b.lon());
 	}
 
 	/** @class MultiPoint
@@ -769,17 +742,17 @@ namespace GeoGeometry {
 			/// @param vector of Points to create MultiPoint from
 			MultiPoint (vector<Point>& v) : GeometryRoot(GeometryType::MultiPoint) {
 				for (auto& a : v) {
-					_points.emplace_back(a.getPosition());
+					_points.emplace_back(a.position());
 				}
 			};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val reference to a GeoJSON object
-			MultiPoint (Value& val) : GeometryRoot(val) {};
+			MultiPoint (Value& val) : GeometryRoot(GeometryType::MultiPoint) {};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val pointer to a GeoJSON object
-			MultiPoint (Value* val) : GeometryRoot(val) {};
+			MultiPoint (Value* val) : GeometryRoot(GeometryType::MultiPoint) {};
 
 			/// @brief is a const_iterator type for returning a target position
 			typedef vector<Position>::const_iterator PositionConstItr;
@@ -787,6 +760,7 @@ namespace GeoGeometry {
 			/// @brief populated this MultiPoint from a GeoJSON object
 			/// @param val pointer to a GeoJSON object
 			/// @returns true if object is successfully populated
+			virtual bool load (Value& val) {return load(&val);};
 			virtual bool load (Value* val) {
 				if (!val) return false;
 				_mytype = GeometryType::MultiPoint;
@@ -800,13 +774,13 @@ namespace GeoGeometry {
 					if (!typeptr || !coordptr || (!typeptr->IsString() || 
 						!(string(typeptr->GetString()) == "MultiPoint") ||
 						!coordptr->IsArray())) return false;
-					if (bboxptr && bboxptr->IsArray()) _bbox = loadBBox(*bboxptr);
+					if (bboxptr && bboxptr->IsArray()) _bbox.load(*bboxptr);
 				} else if (val->IsArray()) {
 					coordptr = val;
 				} else return false;
 				_points.clear();
 				for (auto& v : coordptr->GetArray()) {
-					if (v.IsArray()) _points.emplace_back(loadPosition(v));
+					if (v.IsArray()) _points.emplace_back(Position(v));
 				}
 				return isValid();
 			};
@@ -819,7 +793,8 @@ namespace GeoGeometry {
 				Value v(kObjectType);
 				v.AddMember("type", "MultiPoint", d.GetAllocator());
 				v.AddMember("coordinates", packArray(d), d.GetAllocator());
-				v.AddMember("bbox", packBBox(getbox(), d), d.GetAllocator());
+				bbox();
+				v.AddMember("bbox", _bbox.pack(d), d.GetAllocator());
 				return v;
 			};
 
@@ -829,26 +804,26 @@ namespace GeoGeometry {
 			Value packArray (Document& d) {
 				Value b(kArrayType);
 				for (auto& p : _points) {
-					b.PushBack(packPosition(p, d), d.GetAllocator());
+					b.PushBack(p.pack(d), d.GetAllocator());
 				}
 				return b;
 			};
 
 			/// @brief return a reference to the members of the MultiPoint
-			vector<Position>& getPositions () {return _points;};
+			vector<Position>& positions () {return _points;};
 
 			/// @brief returns a reference to a given member
 			/// @params t the index to return
 			/// @returns the position at index t
-			Position& getPosition (const unsigned int& t) {return _points[t];};
+			Position& position (const unsigned int& t) {return _points[t];};
 
 			/// @brief returns a Point created from a given member
 			/// @params t the index to return
 			/// @returns a Point created from the position at index t
-			Point getPoint (const unsigned int& t) {return Point(_points[t]);};
+			Point point (const unsigned int& t) {return Point(_points[t]);};
 
 			/// @brief returns a vector of Points corresponding to the members of the MultiPoint
-			vector<Point> getPoints () {
+			vector<Point> points () {
 				vector<Point> v;
 				for (auto& p: _points) v.emplace_back(Point(p));
 				return v;
@@ -858,7 +833,7 @@ namespace GeoGeometry {
 			/// @param p the Point to insert
 			/// @param posn the index to insert after
 			/// @returns true if successful
-			bool insert (Point& p, const unsigned int& posn) {return insert(p.getPosition(), posn);};
+			bool insert (Point& p, const unsigned int& posn) {return insert(p.position(), posn);};
 
 			/// @brief insert a new Position after the given index
 			/// @param p the Position to insert
@@ -878,7 +853,7 @@ namespace GeoGeometry {
 			/// @param p the Point to insert
 			/// @returns true if successful
 			bool insert (PositionConstItr& i, Point& p) {
-				return this->insert(i, p.getPosition());
+				return this->insert(i, p.position());
 			};
 
 			/// @brief insert a new Position after the given const_interator
@@ -937,7 +912,7 @@ namespace GeoGeometry {
 			virtual bool isValid () const {
 				bool valid = true;
 				for (auto& p : _points) {
-					valid &= positionValid(p);
+					valid &= p.isValid();
 				}
 				return valid;
 			}
@@ -948,7 +923,7 @@ namespace GeoGeometry {
 			MultiPoint (const vector<Position>& v, GeometryType t) : _points(v), GeometryRoot(t) {};
 			MultiPoint (vector<Point>& v, GeometryType t) : GeometryRoot(t) {
 				for (auto& a : v) {
-					_points.emplace_back(a.getPosition());
+					_points.emplace_back(a.position());
 				}
 			};
 			bool makebox () {
@@ -960,13 +935,12 @@ namespace GeoGeometry {
 				double maxlon = -200.0;
 				double minlon = 200.0;
 				for (auto& a: _points) {
-					if (getlat(a) > maxlat) maxlat = getlat(a);
-					if (getlat(a) < minlat) minlat = getlat(a);
-					if (getlon(a) > maxlon) maxlon = getlon(a);
-					if (getlon(a) < minlon) minlon = getlon(a);
+					if (a.lat() > maxlat) maxlat = a.lat();
+					if (a.lat() < minlat) minlat = a.lat();
+					if (a.lon() > maxlon) maxlon = a.lon();
+					if (a.lon() < minlon) minlon = a.lon();
 				}
-				_bbox = makeBBox(makePosition(minlon, minlat), 
-								makePosition(maxlon, maxlat));
+				_bbox = BoundingBox(maxlon, maxlat, minlon, minlat);
 				return true;
 			};
 	};
@@ -990,14 +964,14 @@ namespace GeoGeometry {
 			/// @param vector of Points to create LineString from
 			LineString (vector<Point>& v) : MultiPoint(GeometryType::LineString) {
 				for (auto& a : v) {
-					_points.push_back(a.getPosition());
+					_points.push_back(a.position());
 				}
 			};
 
 			/// @brief creates a LineString object from the given MultiPoint
 			/// @param v MultiPoint to create LineString from 
 			LineString (MultiPoint& v) : 
-				MultiPoint(v.getPositions(), GeometryType::LineString) {};
+				MultiPoint(v.positions(), GeometryType::LineString) {};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val reference to a GeoJSON object
@@ -1030,42 +1004,42 @@ namespace GeoGeometry {
 			/// @param type the type of course to use for distanc measuring etc.
 			/// @returns a tuple containing the desired position and an iterator to 
 			/// to the start of the line segment that contains the closest position 
-			tuple<Position, PositionConstItr> closestPoint (const Point& target, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
-				double bestdist = 1000000000;
-				PositionConstItr p = _points.cbegin();
-				Position best, newposn;
-				for (auto a = _points.cbegin(); a != _points.cend(); ++a) {
-					if (a != _points.end()) {
-						newposn = point2segment(target, Point(*a), Point(*(a + 1)), type);
-						double newdist = target.distance(newposn, type);
-						if (newdist < bestdist) {
-							bestdist = newdist;
-							best = newposn;
-							p = a;
-						}
-					}
-				}
-				return make_tuple(best, p);
-			};
+			// tuple<Position, PositionConstItr> closestPoint (const Point& target, const CourseTypeEnum type = CourseTypeEnum::GreatCircle) const {
+			// 	double bestdist = 1000000000;
+			// 	PositionConstItr p = _points.cbegin();
+			// 	Position best, newposn;
+			// 	for (auto a = _points.cbegin(); a != _points.cend(); ++a) {
+			// 		if (a != _points.end()) {
+			// 			newposn = point2segment(target, Point(*a), Point(*(a + 1)), type);
+			// 			double newdist = target.distance(newposn, type);
+			// 			if (newdist < bestdist) {
+			// 				bestdist = newdist;
+			// 				best = newposn;
+			// 				p = a;
+			// 			}
+			// 		}
+			// 	}
+			// 	return make_tuple(best, p);
+			// };
 
 			/// @brief find the line segments in the LineString that intersect with
 			/// the given line segment.
 			/// @param s0 start point of the line segment to intersect
 			/// @param s1 end point of the line segment to intersect
-			tuple<MultiPoint, vector<PositionConstItr>> intersection (const Point& s0, const Point& s1, const CourseTypeEnum type = CourseTypeEnum::RhumbLine) {
-				Point o0, o1;
-				vector<PositionConstItr> outitr;
-				MultiPoint out;
-				for (auto a = _points.cbegin(); a != _points.cend(); ++a) {
-					if (a != _points.end()) {
-						if (segmentsIntersect(Point(*a), Point(*(a+1)), s0, s1, o0, o1, type)) {
-							outitr.emplace_back(a);
-							out.insert(out.cend(), *a);
-						}
-					} 
-				}
-				return make_tuple(out, outitr);
-			}
+			// tuple<MultiPoint, vector<PositionConstItr>> intersection (const Point& s0, const Point& s1, const CourseTypeEnum type = CourseTypeEnum::RhumbLine) {
+			// 	Point o0, o1;
+			// 	vector<PositionConstItr> outitr;
+			// 	MultiPoint out;
+			// 	for (auto a = _points.cbegin(); a != _points.cend(); ++a) {
+			// 		if (a != _points.end()) {
+			// 			if (segmentsIntersect(Point(*a), Point(*(a+1)), s0, s1, o0, o1, type)) {
+			// 				outitr.emplace_back(a);
+			// 				out.insert(out.cend(), *a);
+			// 			}
+			// 		} 
+			// 	}
+			// 	return make_tuple(out, outitr);
+			// }
 		
 			/// @brief calculate the total length of the LineString
 			/// @param type type of the course to use for distance finding
@@ -1085,7 +1059,7 @@ namespace GeoGeometry {
 			LineString (GeometryType t) : MultiPoint(t) {};
 			LineString (const vector<Position> v, GeometryType t) : MultiPoint(v, t) {};
 			LineString (vector<Point> v, GeometryType t) : MultiPoint(v, t) {};
-			LineString (MultiPoint v, GeometryType t) : MultiPoint(v.getPositions(), t) {};
+			LineString (MultiPoint v, GeometryType t) : MultiPoint(v.positions(), t) {};
 
 	};
 
@@ -1113,7 +1087,7 @@ namespace GeoGeometry {
 				
 			/// @brief create a polygon from the given LineString
 			/// Note that this will not close the polygon if it is not already closed
-			Polygon (LineString& v) : LineString(v.getPositions(), GeometryType::Polygon) {};
+			Polygon (LineString& v) : LineString(v.positions(), GeometryType::Polygon) {};
 
 			// @brief creates a Point object from a GeoJSON object
 			// @param val reference to a GeoJSON object
@@ -1149,7 +1123,7 @@ namespace GeoGeometry {
 			/// closed. Returns false if the first element is invalid
 			bool close () {
 				if (isClosed()) return true;
-				if (positionValid(*(_points.cbegin()))) {
+				if ((_points.cbegin()->isValid())) {
 					_points.emplace_back(*(_points.cbegin()));
 					return true;
 				} 
@@ -1179,9 +1153,9 @@ namespace GeoGeometry {
 				return Polygon();
 			};
 
-			bool includes (Point& p) {return includes(p.getPosition());};
+			bool includes (Point& p) {return includes(p.position());};
 			bool includes (Position& p) {
-				if (bboxContains(_bbox, p)) {
+				if (_bbox.contains(p)) {
 
 				} 
 				return false;
@@ -1196,9 +1170,7 @@ namespace GeoGeometry {
 			bool isClosed () {
 				Position first = *(_points.cbegin());
 				Position last = *(_points.cend());
-				return (positionValid(first) && positionValid(last) && 
-						(getlat(first) == getlat(last)) && 
-						(getlon(first) == getlon(last)));
+				return (first.isValid() && last.isValid() && (first == last));
 			};
 	};
 
@@ -1347,14 +1319,13 @@ namespace GeoGeometry {
 				double maxlon = -200.0;
 				double minlon = 200.0;
 				for (auto& a: _elements) {
-					BoundingBox b = a->getbox();
-					if (getlat(getne(b)) > maxlat) maxlat = getlat(getne(b));
-					if (getlat(getsw(b)) < minlat) minlat = getlat(getsw(b));
-					if (getlon(getne(b)) > maxlon) maxlon = getlon(getne(b));
-					if (getlon(getsw(b)) < minlon) minlon = getlon(getsw(b));
+					BoundingBox b = a->bbox();
+					if (b.ne().lat() > maxlat) maxlat = b.ne().lat();
+					if (b.sw().lat() < minlat) minlat = b.sw().lat();
+					if (b.ne().lon() > maxlon) maxlon = b.ne().lon();
+					if (b.sw().lon() < minlon) minlon = b.sw().lon();
 				}
-				_bbox = makeBBox(makePosition(minlon, minlat), 
-								makePosition(maxlon, maxlat));
+				_bbox = BoundingBox(maxlon, maxlat, minlon, minlat);
 				return true;
 			};
 	};
@@ -1411,7 +1382,7 @@ namespace GeoGeometry {
 					if (!typeptr || !coordptr || (!typeptr->IsString() || 
 						!(string(typeptr->GetString()) == "MultiLineString") ||
 						!coordptr->IsArray())) return false;
-					if (bboxptr && bboxptr->IsArray()) _bbox = loadBBox(*bboxptr);
+					if (bboxptr && bboxptr->IsArray()) _bbox.load(*bboxptr);
 				} else if (val->IsArray()) {
 					coordptr = val;
 				} else return false;
@@ -1430,7 +1401,7 @@ namespace GeoGeometry {
 				Value v(kObjectType);
 				v.AddMember("type", "MultiLineString", d.GetAllocator());
 				v.AddMember("coordinates", packArray(d), d.GetAllocator());
-				v.AddMember("bbox", packBBox(getbox(), d), d.GetAllocator());
+				v.AddMember("bbox", _bbox.pack(d), d.GetAllocator());
 				return v;
 			};
 
@@ -1491,7 +1462,7 @@ namespace GeoGeometry {
 					if (!typeptr || !coordptr || (!typeptr->IsString() || 
 						!(string(typeptr->GetString()) == "MultiPolygon") ||
 						!coordptr->IsArray())) return false;
-					if (bboxptr && bboxptr->IsArray()) _bbox = loadBBox(*bboxptr);
+					if (bboxptr && bboxptr->IsArray()) _bbox.load(*bboxptr);
 				} else if (val->IsArray()) {
 					coordptr = val;
 				} else return false;
@@ -1507,13 +1478,13 @@ namespace GeoGeometry {
 				Value v(kObjectType);
 				v.AddMember("type", "MultiPolygon", d.GetAllocator());
 				v.AddMember("coordinates", packArray(d), d.GetAllocator());
-				v.AddMember("bbox", packBBox(getbox(), d), d.GetAllocator());
+				v.AddMember("bbox", _bbox.pack(d), d.GetAllocator());
 				return v;
 			};
 
-			bool includes (Point& p) {return includes(p.getPosition());};
+			bool includes (Point& p) {return includes(p.position());};
 			bool includes (Position& p) {
-				if (bboxContains(_bbox, p)) {
+				if (_bbox.contains(p)) {
 					for (auto a : _elements) {
 						if (a->includes(p)) return true;
 					}
@@ -1544,88 +1515,16 @@ namespace GeoGeometry {
 	/// @param s1 is the other end of the line segment
 	/// @param type the distance type used in this calculation
 	/// @returns the Position on the line segment closest to p
-	inline Position point2segment(Point& p, Point& s0, Point& s1, const CourseTypeEnum type) {
-		TwoVector v = s0.target(s1.getPosition(), type);
-		TwoVector w = s0.target(p.getPosition(), type);
-		double c1 = w * v;
-		if (c1 <= 0) return s0.getPosition();
-		double c2 = v * v;
-		if (c2 <= c1) return s1.getPosition();
-		double b = c1/c2;
-		return s0.project((b * v), type);
-	};
-
-	/// @brief determines whether two line segments intersect
-	/// Note that this function may behave strangely with great circle distances
-	/// This function was derived from http://geomalgorithms.com/a05-_intersect-1.html
-	/// @param s10 start of the first line segment
-	/// @param s11 end of the first line segment
-	/// @param s20 start of the second line segment
-	/// @param s21 end of the second line segment
-	/// @param intersect0 this Position is set to the intersection point, 
-	/// or untouched if there is no intersection
-	/// @param intersect1 if the segments overlap, intersect1 is set to the 
-	/// other end of the overlapping segment, otherwise untouched
-	/// @returns 0 if no intersection, 1 if they intersect at a point, and 2 if they overlap
-	inline unsigned int segmentsIntersect (Point& s10, Point& s11, Point& s20, Point& s21,
-											Point& intersect0, Point& intersect1,
-											const CourseTypeEnum type) {
-		TwoVector u = s10.target(s11.getPosition(), type);
-		TwoVector v = s20.target(s21.getPosition(), type);
-		TwoVector w = s20.target(s11.getPosition(), type);
-		double D = u.perp(v);
-
-		if (fabs(D) < smallnum)	{								// S1 & S2 are parallel
-			if ((u.perp(w) != 0) || v.perp(w) != 0) return 0;	// They are not collinear
-			// check if they are degenerate points
-			double du = u * u;
-			double dv = v * v;
-			if ((du < smallnum) && (dv < smallnum)) {			// Both segments are points
-				if (s10 != s20) return 0;						// They are distinct points
-				intersect0 = s10;
-				return 1;
-			} else if (du < smallnum) {							// s1 is a single point
-				if (inSegment(s10.getPosition(), s20.getPosition(), s21.getPosition())) {
-					intersect0 = s10;
-					return 1;
-				} else return 0;
-			} else if (dv < smallnum) {							// s2 is a single point
-				if (inSegment(s20.getPosition(), s10.getPosition(), s11.getPosition())) {
-					intersect0 = s20;
-					return 1;
-				} else return 0;
-			} else {											// s1 and s2 are collinear and may overlap if it exists
-				double t0, t1;									// endpoints of s1 in eqn for s2
-				TwoVector w2 = s20.target(s11.getPosition(), type);
-				if (fabs(v.x()) > smallnum) {
-					t0 = w.x()/v.x();
-					t1 = w2.x()/v.x();
-				} else {
-					t0 = w.y()/v.y();
-					t1 = w2.y()/v.y();
-				}
-				if (t0 > t1) swap(t0,t1);						// t0 must be smaller than t1
-				if ((t0 > 1) || (t1 < 0)) return 0;				// no overlap, return 
-				t0 = t0 < 0 ? 0 : t0;							// clip to min 0
-				t1 = t1 > 1 ? 1 : t1;							// clip to max 1
-				if (fabs(t0-t1) < smallnum) {					// intersection is a point
-					intersect0 = Point(s20.project(v * t0, type));
-					return 1;
-				} else {
-					intersect0 = Point(s20.project(v * t0, type));
-					intersect1 = Point(s20.project(v * t1, type));
-					return 2;
-				}
-			}
-		} else {								// the segments are skew and map intersect
-			double sI = v.perp(w)/D;			// get intersect parameter for s1
-			if ((sI < 0) || (sI > 1)) return 0;	// no intersection
-			double tI = u.perp(w)/D;			// get the intersect parameters for s2
-			if ((tI < 0) || (tI > 1)) return 0;	// no intersection
-			intersect0 = Point(s11.project((u * (-sI)), type));
-			return 1;
-		}
-	}
+	// inline Position point2segment(Point& p, Point& s0, Point& s1, const CourseTypeEnum type) {
+	// 	TwoVector v = s0.target(s1.position(), type);
+	// 	TwoVector w = s0.target(p.position(), type);
+	// 	double c1 = w * v;
+	// 	if (c1 <= 0) return s0.position();
+	// 	double c2 = v * v;
+	// 	if (c2 <= c1) return s1.position();
+	// 	double b = c1/c2;
+	// 	return s0.project((b * v), type);
+	// };
 
 	/// @brief generates a pointer to a new geometry object from the given GeoJSON object
 	/// @param val pointer to a GeoJSON object
